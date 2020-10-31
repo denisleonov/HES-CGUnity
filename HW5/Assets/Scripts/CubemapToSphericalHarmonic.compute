@@ -1,0 +1,142 @@
+#pragma kernel ComputeHarmonics
+
+#define PI            3.14159265359f
+#define TWO_PI        6.28318530718f
+#define FOUR_PI       12.56637061436f
+#define INV_PI        0.31830988618f
+#define INV_TWO_PI    0.15915494309f
+#define INV_FOUR_PI   0.07957747155f
+#define HALF_PI       1.57079632679f
+#define INV_HALF_PI   0.636619772367f
+
+#define K00    0.282094791774f
+#define K11    -0.488602511903f
+#define K1_1   -0.488602511903f
+#define K10    0.488602511903f
+#define K20    0.315391565253f
+#define K21    -1.092548430592f
+#define K2_1   -1.092548430592f 
+#define K2_2   1.092548430592f
+#define K22    0.546274215296f
+#define A0     3.14159265359f
+#define A1     2.094395102393f
+#define A2     0.785398163397f
+
+
+RWStructuredBuffer<float4> SH_0_1_r;
+RWStructuredBuffer<float4> SH_0_1_g;
+RWStructuredBuffer<float4> SH_0_1_b;
+
+RWStructuredBuffer<float4> SH_2_r;
+RWStructuredBuffer<float4> SH_2_g;
+RWStructuredBuffer<float4> SH_2_b;
+
+RWStructuredBuffer<float4> SH_2_rgb;
+
+TextureCube<half4> _Env;
+SamplerState samplerLinearRepeat;
+
+uint Hash(uint s)
+{
+    s ^= 2747636419u;
+    s *= 2654435769u;
+    s ^= s >> 16;
+    s *= 2654435769u;
+    s ^= s >> 16;
+    s *= 2654435769u;
+    return s;
+}
+
+float Random(uint seed)
+{
+    return float(Hash(seed)) / 4294967295.0; // 2^32-1
+}
+
+float3 SampleColor(float3 direction)
+{   
+    float4 tex = _Env.SampleLevel(samplerLinearRepeat, direction, 0);
+    return tex.rgb;
+}
+
+[numthreads(1024, 1, 1)]
+void ComputeHarmonics(uint id : SV_DispatchThreadID)
+{
+    const int THREADS = 1024;
+    const int SAMPLES = 5000;
+    
+    // See SH.shader for more details
+    float4 results[7] = {
+        float4(0, 0, 0, 0), // SH_0_1_r
+        float4(0, 0, 0, 0), // SH_0_1_g
+        float4(0, 0, 0, 0), // SH_0_1_b
+        
+        float4(0, 0, 0, 0), // SH_2_r
+        float4(0, 0, 0, 0), // SH_2_g
+        float4(0, 0, 0, 0), // SH_2_b
+        
+        float4(0, 0, 0, 0), // SH_2_rgb // (L=2; M=2)
+    };
+    
+    // Populate results buffer using monte-carlo method.
+    // You can see the Random(i) function. Use it just as with the previous task.
+    
+    // TASK: project light from _Env to spherical harmonic coefficients and store them in results[]
+    float3 L00   = float3(0.0, 0.0, 0.0);
+    float3 L11   = float3(0.0, 0.0, 0.0);
+    float3 L10   = float3(0.0, 0.0, 0.0);
+    float3 L1_1  = float3(0.0, 0.0, 0.0);
+    float3 L21   = float3(0.0, 0.0, 0.0);
+    float3 L2_1  = float3(0.0, 0.0, 0.0);
+    float3 L2_2  = float3(0.0, 0.0, 0.0);
+    float3 L20   = float3(0.0, 0.0, 0.0);
+    float3 L22   = float3(0.0, 0.0, 0.0);
+    for (int j = 0; j < SAMPLES; j++)
+    {
+        float phi = acos(1 - 2 * Random(2 * j));
+        float theta = 2 * PI * Random(2 * j + 1);
+        float3 lightDir = float3(sin(phi) * cos(theta), sin(phi) * sin(theta), cos(phi));
+
+        float Y00 = K00;
+        float Y11 = K11 * lightDir.x;
+        float Y10 = K10 * lightDir.z;
+        float Y1_1 = K1_1 * lightDir.y;
+        float Y21 = K21 * lightDir.x * lightDir.z;
+        float Y2_1 = K2_1 * lightDir.y * lightDir.z;
+        float Y2_2 = K2_2 * lightDir.y * lightDir.x;
+        float Y20 = K20 * (3.0f * lightDir.z * lightDir.z - 1.0f);
+        float Y22 = K22 * (lightDir.x * lightDir.x - lightDir.y * lightDir.y);
+
+        float3 Li = SampleColor(lightDir);
+
+        L00 += Li * Y00;
+        L11 += Li * Y11;
+        L10 += Li * Y10;
+        L1_1 += Li * Y1_1;
+        L21 += Li * Y21;
+        L2_1 += Li * Y2_1;
+        L2_2 += Li * Y2_2;
+        L20 += Li * Y20;
+        L22 += Li * Y22;        
+    }
+    
+    float S = SAMPLES / 4 / PI;
+    L00 = INV_PI * L00  * A0 * K00 / S;
+    L11 = INV_PI * L11 * A1 * K11 / S;
+    L10 = INV_PI * L10 * A1 * K10 / S;
+    L1_1 = INV_PI * L1_1 * A1 * K1_1 / S;
+    L21 = INV_PI * L21 * A2 * K21 / S;
+    L2_1 = INV_PI * L2_1 * A2 * K2_1 / S;
+    L2_2 = INV_PI * L2_2 * A2 * K2_2 / S;
+    L20 = INV_PI * L20 * A2 * K20 / S;
+    L22 = INV_PI * L22 * A2 * K22 / S;
+    
+    SH_0_1_r[id] = float4(L11.r, L1_1.r, L10.r, L00.r);
+    SH_0_1_g[id] = float4(L11.g, L1_1.g, L10.g, L00.g);
+    SH_0_1_b[id] = float4(L11.b, L1_1.b, L10.b, L00.b);
+    
+    SH_2_r[id] = float4(L2_2.r, L2_1.r, L21.r, L20.r);
+    SH_2_g[id] = float4(L2_2.g, L2_1.g, L21.g, L20.g);
+    SH_2_b[id] = float4(L2_2.b, L2_1.b, L21.b, L20.b);
+    
+    SH_2_rgb[id] = float4(L22.r, L22.g, L22.b, 0.0f);
+}
